@@ -1,18 +1,20 @@
-"use client";
+﻿"use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type FormEvent } from "react";
+import type { Session } from "@supabase/supabase-js";
 import Desktop, { DesktopIcon as DesktopIconType } from "@/components/Desktop";
 import Taskbar from "@/components/Taskbar";
 import Window from "@/components/Window";
 import AboutApp from "@/components/apps/AboutApp";
 import FileManager, { FileItem } from "@/components/apps/FileManager";
 import MinesweeperApp from "@/components/apps/Minesweeper";
-import Notepad from "@/components/apps/Notepad";
+import NotesApp from "@/components/apps/NotesApp";
 import PaintApp from "@/components/apps/PaintApp";
 import RecycleBin from "@/components/apps/RecycleBin";
 import SettingsApp from "@/components/apps/SettingsApp";
 import MyComputer from "@/components/apps/MyComputer";
 import FolderApp, { FolderItem } from "@/components/apps/FolderApp";
+import supabase from "@/lib/supabaseClient";
 
 type RecycleIcon = DesktopIconType & { contents?: FolderItem[] };
 
@@ -46,7 +48,7 @@ export type WindowState = {
 
 const titles: Record<AppType, string> = {
   files: "My Files",
-  notepad: "Notepad",
+  notepad: "Notes",
   paint: "Retro Paint",
   minesweeper: "Minesweeper",
   about: "About RetroOS",
@@ -58,7 +60,7 @@ const titles: Record<AppType, string> = {
 
 const defaults: Record<AppType, { position: Position; size: Size }> = {
   files: { position: { x: 70, y: 80 }, size: { width: 420, height: 320 } },
-  notepad: { position: { x: 140, y: 90 }, size: { width: 500, height: 460 } },
+  notepad: { position: { x: 140, y: 90 }, size: { width: 520, height: 520 } },
   paint: { position: { x: 200, y: 120 }, size: { width: 520, height: 420 } },
   minesweeper: { position: { x: 260, y: 150 }, size: { width: 380, height: 420 } },
   about: { position: { x: 180, y: 110 }, size: { width: 360, height: 220 } },
@@ -88,6 +90,13 @@ const wallpapers = [
 ];
 
 export default function HomePage() {
+  // Supabase auth: gate the desktop until a valid session exists
+  const [session, setSession] = useState<Session | null>(null);
+  const [sessionChecked, setSessionChecked] = useState(false);
+  const [authError, setAuthError] = useState<string | null>(null);
+  const [authLoading, setAuthLoading] = useState(false);
+  const [credentials, setCredentials] = useState({ email: "", password: "" });
+
   const [windows, setWindows] = useState<WindowState[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [zIndexCounter, setZIndexCounter] = useState(1);
@@ -103,7 +112,6 @@ export default function HomePage() {
   const [deletedIcons, setDeletedIcons] = useState<RecycleIcon[]>([]);
   const [folderContents, setFolderContents] = useState<Record<string, FolderItem[]>>({});
   const [folderCounter, setFolderCounter] = useState(1);
-  type RecycleIcon = DesktopIconType & { contents?: FolderItem[] };
   const [desktopIcons, setDesktopIcons] = useState<DesktopIconType[]>([
     {
       id: "files",
@@ -123,7 +131,7 @@ export default function HomePage() {
     },
     {
       id: "notepad",
-      label: "Notepad",
+      label: "Notes",
       color: "#f2d28c",
       variant: "notepad",
       position: { x: 12, y: 208 },
@@ -174,47 +182,82 @@ export default function HomePage() {
     localStorage.setItem("retroos_wallpaper", wallpaperId);
   }, [wallpaperId]);
 
+  useEffect(() => {
+    // Supabase session bootstrap + listener
+    const run = async () => {
+      const { data, error } = await supabase.auth.getSession();
+      if (error) {
+        setAuthError(error.message);
+      }
+      setSession(data?.session ?? null);
+      setSessionChecked(true);
+    };
+    run();
+
+    const { data: listener } = supabase.auth.onAuthStateChange((_event, data) => {
+      setSession(data.session ?? null);
+      setSessionChecked(true);
+    });
+
+    return () => {
+      listener?.subscription.unsubscribe();
+    };
+  }, []);
+
+  useEffect(() => {
+    // Clear desktop state on sign out so we do not keep stale windows
+    if (!session) {
+      setWindows([]);
+      setActiveId(null);
+      setStartOpen(false);
+    }
+  }, [session]);
+
   const wallpaperValue = useMemo(
     () => wallpapers.find((item) => item.id === wallpaperId)?.value || wallpapers[0].value,
     [wallpaperId],
   );
 
-const bumpZ = () => {
-  let updated = 0;
-  setZIndexCounter((prev) => {
-    updated = prev + 1;
-    return updated;
-  });
-  return updated || zIndexCounter + 1;
-};
+  const bumpZ = () => {
+    let updated = 0;
+    setZIndexCounter((prev) => {
+      updated = prev + 1;
+      return updated;
+    });
+    return updated || zIndexCounter + 1;
+  };
 
-const openWindow = (appType: AppType, extra?: Partial<WindowState>) => {
-  const newId = `${appType}-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
-  const nextZ = bumpZ();
-  setWindows((prev) => [
-    ...prev,
-    {
-      id: newId,
-      appType,
-      title: titles[appType],
-      position: {
-        x: defaults[appType].position.x + (prev.length * 14) % 60,
-        y: defaults[appType].position.y + (prev.length * 10) % 50,
+  const openWindow = (appType: AppType, extra?: Partial<WindowState>) => {
+    if (!session) {
+      setAuthError("Te rog autentifica-te pentru a deschide aplicatiile.");
+      return;
+    }
+    const newId = `${appType}-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+    const nextZ = bumpZ();
+    setWindows((prev) => [
+      ...prev,
+      {
+        id: newId,
+        appType,
+        title: titles[appType],
+        position: {
+          x: defaults[appType].position.x + (prev.length * 14) % 60,
+          y: defaults[appType].position.y + (prev.length * 10) % 50,
+        },
+        size: defaults[appType].size,
+        minimized: false,
+        maximized: false,
+        zIndex: nextZ,
+        ...extra,
       },
-      size: defaults[appType].size,
-      minimized: false,
-      maximized: false,
-      zIndex: nextZ,
-      ...extra,
-    },
-  ]);
-  setActiveId(newId);
-  setStartOpen(false);
-};
+    ]);
+    setActiveId(newId);
+    setStartOpen(false);
+  };
 
-const openFolder = (folderId: string) => {
-  openWindow("folder", { folderId, title: desktopIcons.find((i) => i.id === folderId)?.label || "Folder" });
-};
+  const openFolder = (folderId: string) => {
+    openWindow("folder", { folderId, title: desktopIcons.find((i) => i.id === folderId)?.label || "Folder" });
+  };
 
   const focusWindow = (id: string) => {
     const nextZ = bumpZ();
@@ -326,7 +369,7 @@ const openFolder = (folderId: string) => {
       label: "Programs",
       items: [
         { id: "computer", label: "My Computer", action: () => openWindow("computer") },
-        { id: "notepad", label: "Notepad", action: () => openWindow("notepad") },
+        { id: "notepad", label: "Notes", action: () => openWindow("notepad") },
         { id: "paint", label: "Paint", action: () => openWindow("paint") },
         { id: "minesweeper", label: "Minesweeper", action: () => openWindow("minesweeper") },
       ],
@@ -388,7 +431,7 @@ const openFolder = (folderId: string) => {
       case "files":
         return <FileManager files={files} onDelete={deleteFile} />;
       case "notepad":
-        return <Notepad />;
+        return <NotesApp accessToken={session?.access_token ?? ""} userId={session?.user?.id ?? ""} />;
       case "paint":
         return <PaintApp />;
       case "minesweeper":
@@ -457,6 +500,96 @@ const openFolder = (folderId: string) => {
         return null;
     }
   };
+
+  const handleLogin = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setAuthError(null);
+    setAuthLoading(true);
+    const { data, error } = await supabase.auth.signInWithPassword({
+      email: credentials.email,
+      password: credentials.password,
+    });
+    if (error) {
+      setAuthError(error.message);
+    } else {
+      setSession(data.session ?? null);
+    }
+    setAuthLoading(false);
+  };
+
+  const handleSignOut = async () => {
+    setAuthLoading(true);
+    await supabase.auth.signOut();
+    setSession(null);
+    setAuthLoading(false);
+  };
+
+  if (!sessionChecked) {
+    return (
+      <main style={{ width: "100vw", height: "100vh", display: "grid", placeItems: "center", background: wallpapers[0].value }}>
+        <div className="window" style={{ width: 320 }}>
+          <div className="title-bar active">
+            <span className="title-text">RetroOS 98</span>
+          </div>
+          <div className="window-body" style={{ padding: 12 }}>Checking session...</div>
+        </div>
+      </main>
+    );
+  }
+
+  if (!session) {
+    return (
+      <main
+        style={{
+          width: "100vw",
+          height: "100vh",
+          position: "relative",
+          background: wallpapers.find((w) => w.id === wallpaperId)?.value || wallpapers[0].value,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          padding: 24,
+        }}
+      >
+        <div className="window" style={{ width: 420, maxWidth: "100%" }}>
+          <div className="title-bar active">
+            <span className="title-text">Log in to RetroOS 98</span>
+          </div>
+          <div className="window-body" style={{ padding: 12 }}>
+            <form onSubmit={handleLogin} style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+              <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                <span>Email</span>
+                <input
+                  type="email"
+                  required
+                  className="input"
+                  value={credentials.email}
+                  onChange={(event) => setCredentials((prev) => ({ ...prev, email: event.target.value }))}
+                />
+              </label>
+              <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                <span>Password</span>
+                <input
+                  type="password"
+                  required
+                  className="input"
+                  value={credentials.password}
+                  onChange={(event) => setCredentials((prev) => ({ ...prev, password: event.target.value }))}
+                />
+              </label>
+              <button className="menu-button" type="submit" disabled={authLoading}>
+                {authLoading ? "Logging in..." : "Login"}
+              </button>
+              {authError ? <div style={{ color: "#8b0000", fontSize: 12 }}>{authError}</div> : null}
+              <div style={{ fontSize: 12, color: "#333" }}>
+                Introdu email si parola setate in Supabase Authentication. Vei intra direct pe desktop dupa autentificare.
+              </div>
+            </form>
+          </div>
+        </div>
+      </main>
+    );
+  }
 
   return (
     <main
@@ -576,6 +709,8 @@ const openFolder = (folderId: string) => {
         onToggleStart={() => setStartOpen((open) => !open)}
         onSelectWindow={handleTaskClick}
         startSections={startSections}
+        userLabel={session.user.email || session.user.user_metadata?.username || "User"}
+        onSignOut={handleSignOut}
       />
     </main>
   );

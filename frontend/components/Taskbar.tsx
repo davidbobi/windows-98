@@ -27,6 +27,8 @@ type TaskbarProps = {
   onToggleStart: () => void;
   onSelectWindow: (id: string) => void;
   startSections: StartSection[];
+  userLabel?: string;
+  onSignOut?: () => void;
 };
 
 export default function Taskbar({
@@ -36,8 +38,11 @@ export default function Taskbar({
   onToggleStart,
   onSelectWindow,
   startSections,
+  userLabel,
+  onSignOut,
 }: TaskbarProps) {
   const [time, setTime] = useState("");
+  const [userMenuOpen, setUserMenuOpen] = useState(false);
 
   useEffect(() => {
     const updateClock = () => {
@@ -63,6 +68,7 @@ export default function Taskbar({
           className="start-button"
           onClick={(event) => {
             event.stopPropagation();
+            setUserMenuOpen(false);
             onToggleStart();
           }}
           onMouseDown={(event) => event.stopPropagation()}
@@ -84,8 +90,51 @@ export default function Taskbar({
             </button>
           ))}
         </div>
-        <div className="task-clock" aria-label="clock">
-          {time}
+        <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 6 }}>
+          {userLabel ? (
+            <div style={{ position: "relative" }} onMouseLeave={() => setUserMenuOpen(false)}>
+              <button
+                className="menu-button"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  setUserMenuOpen((open) => !open);
+                }}
+                onMouseDown={(event) => event.stopPropagation()}
+                type="button"
+              >
+                {userLabel}
+              </button>
+              {userMenuOpen ? (
+                <div
+                  style={{
+                    position: "absolute",
+                    right: 0,
+                    bottom: "100%",
+                    background: "#f0f0f0",
+                    border: "1px solid #808080",
+                    boxShadow: "2px 2px 0 #00000040",
+                    minWidth: 140,
+                    zIndex: 99999,
+                  }}
+                >
+                  <button
+                    className="menu-item"
+                    style={{ width: "100%" }}
+                    onClick={() => {
+                      setUserMenuOpen(false);
+                      onSignOut?.();
+                    }}
+                    type="button"
+                  >
+                    Sign out
+                  </button>
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+          <div className="task-clock" aria-label="clock">
+            {time}
+          </div>
         </div>
       </div>
       {startOpen ? (
